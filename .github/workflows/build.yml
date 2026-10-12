@@ -35,6 +35,11 @@ jobs:
             echo "theos exists"
           fi
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          # Ensure ldid is available (Theos signing)
+          if ! command -v ldid >/dev/null 2>&1; then
+            brew install ldid 2>&1 | tail -n 20 || true
+          fi
+          which ldid; ldid --help 2>&1 | head -n 5 || true
 
       - name: Cache SDK
         run: |
