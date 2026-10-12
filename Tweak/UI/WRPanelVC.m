@@ -70,7 +70,7 @@
     if (isActive){
         [WRActionSheet showFrom:self title:c.name actions:@[
             @{@"title":@"📍 Changer localisation",@"style":@"default",@"block":^{ [self changeLocationFor:c]; }},
-            @{@"title":@"✏️ Renommer",@"style":@"default",@"block":^{ [self rename:c]; }},
+            @{@"title":@"✏️ Renommer",@"style":@"default",@"block":^{ [self wr_rename:c]; }},
             @{@"title":@"🗑 Supprimer",@"style":@"destructive",@"block":^{ [self confirmDelete:c]; }},
             @{@"title":@"Annuler",@"style":@"cancel",@"block":^{}},
         ]];
@@ -91,7 +91,7 @@
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:vc];
     [self presentViewController:nav animated:YES completion:nil];
 }
-- (void)rename:(WRContainer*)c{
+- (void)wr_rename:(WRContainer*)c{
     UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Renommer" message:nil preferredStyle:UIAlertControllerStyleAlert];
     [a addTextFieldWithConfigurationHandler:^(UITextField*f){ f.text=c.name; }];
     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){ NSString*t=a.textFields.firstObject.text; if(t.length){ c.name=t; [WRContainerStore.shared updateContainer:c]; [self.table reloadData]; [self reloadHeader]; }}]];
