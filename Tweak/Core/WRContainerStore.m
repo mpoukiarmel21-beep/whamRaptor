@@ -82,7 +82,7 @@
     // purge keychain items prefixed by container (service contains cid)
     [self purgeKeychainForContainerID:cid];
     // purge prefs files if any
-    NSString *prefsDir=[WRPaths.containerHomeForID:cid stringByAppendingPathComponent:@"Library/Preferences"];
+    NSString *prefsDir=[[WRPaths containerHomeForID:cid] stringByAppendingPathComponent:@"Library/Preferences"];
     [[NSFileManager defaultManager] removeItemAtPath:prefsDir error:nil];
 }
 

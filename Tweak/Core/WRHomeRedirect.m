@@ -6,6 +6,7 @@
 #import <dlfcn.h>
 #import <string.h>
 #import <unistd.h>
+#import <objc/runtime.h>
 
 static NSString *gOrigHome=nil;
 

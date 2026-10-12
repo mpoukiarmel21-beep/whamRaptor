@@ -38,7 +38,7 @@ WhamRaptor_FILES := \
 	Tweak/Util/WRDiagnostics.m \
 	vendor/fishhook/fishhook.c
 
-WhamRaptor_CFLAGS := -fobjc-arc -fobjc-arc-exceptions -Ivendor/fishhook -ITweak -ITweak/Core -ITweak/Spoof -ITweak/UI -ITweak/Util -Wno-deprecated-declarations -Wno-unused-function -Wno-objc-protocol-method-implementation
+WhamRaptor_CFLAGS := -fobjc-arc -fobjc-arc-exceptions -Ivendor/fishhook -ITweak -ITweak/Core -ITweak/Spoof -ITweak/UI -ITweak/Util -Wno-deprecated-declarations -Wno-unused-function -Wno-objc-protocol-method-implementation -Wno-nullability-completeness -Wno-nullability-completeness-on-arrays
 WhamRaptor_FRAMEWORKS := UIKit Foundation CoreLocation MapKit QuartzCore CoreGraphics Security
 WhamRaptor_PRIVATE_FRAMEWORKS :=
 WhamRaptor_LDFLAGS := -weak_framework CoreLocation -weak_framework MapKit

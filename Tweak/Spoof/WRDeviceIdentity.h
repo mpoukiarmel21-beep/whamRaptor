@@ -1,10 +1,11 @@
 #import <Foundation/Foundation.h>
-#import "WRContainer.h"
-
+@class WRDeviceIdentity;
+NS_ASSUME_NONNULL_BEGIN
 @interface WRDeviceIdentityFactory : NSObject
-+ (WRDeviceIdentity *)generateIdentity; // chip-aware, iOS 26/27 pool
-+ (nullable NSDictionary *)deviceForMachine:(NSString *)machine;
++ (WRDeviceIdentity *)generateIdentity;
++ (nullable NSDictionary *)deviceForMachine:(NSString * _Nullable)machine;
 + (NSArray<NSDictionary*>*)allDevices;
 + (NSString *)randomSerial;
 + (NSString *)randomUUID;
 @end
+NS_ASSUME_NONNULL_END
