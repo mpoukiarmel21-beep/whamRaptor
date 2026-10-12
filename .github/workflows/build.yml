@@ -160,6 +160,13 @@ jobs:
           rm -f "$APP/Frameworks/FLEXing.dylib" 2>/dev/null || true
           rm -f "$APP/Frameworks/libflex.dylib" 2>/dev/null || true
           rm -rf "$APP/Frameworks/CydiaSubstrate.framework" 2>/dev/null || true
+          # Strip beta/dev markers that trigger TestFlight update banner
+          echo "== Info.plist pre ==="; /usr/libexec/PlistBuddy -c "Print :FBBuildBranchName" "$APP/Info.plist" 2>&1 | head -n 5 || true
+          /usr/libexec/PlistBuddy -c "Set :FBBuildBranchName stable" "$APP/Info.plist" 2>&1 | head -n 5 || /usr/libexec/PlistBuddy -c "Add :FBBuildBranchName string stable" "$APP/Info.plist" 2>&1 | head -n 5 || true
+          /usr/libexec/PlistBuddy -c "Delete :ITSAppUsesNonExemptEncryption" "$APP/Info.plist" 2>&1 | head -n 5 || true
+          # Remove any Beta/TestFlight entitlement that survived
+          /usr/libexec/PlistBuddy -c "Delete :BetaReportsActive" "$APP/Info.plist" 2>&1 | head -n 5 || true
+          echo "== Info.plist post =="; /usr/libexec/PlistBuddy -c "Print :FBBuildBranchName" "$APP/Info.plist" 2>&1 | head -n 5 || true
           # LIEF clean LC_LOAD_WEAK_DYLIB
           BIN="$APP/Instagram"
           if [ ! -f "$BIN" ]; then BIN="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null || echo Instagram)"; fi

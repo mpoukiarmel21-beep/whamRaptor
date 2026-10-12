@@ -3,6 +3,7 @@
 #import "Core/WRPaths.h"
 #import "Core/WRContainerStore.h"
 #import "Core/WRHomeRedirect.h"
+#import "Spoof/WRFileHook.h"
 #import "Spoof/WRDeviceIdentity.h"
 #import "Spoof/WRDeviceSpoof.h"
 #import "Spoof/WRLocaleSpoof.h"
@@ -29,20 +30,22 @@ static void WRBootstrap(void){
         @try { safe = [WRLaunchGuard isSafeMode]; } @catch(...) { safe = NO; }
 
         if (!safe){
-            // Critical HOME first, isolated — no ObjC swizzle before UIKit
+            // Critical isolation before IG reads prefs/keychain/files — must be before UIKit init
             WR_SafeInstall([WRHomeRedirect install]);
-            // Defer remaining hooks until UIKit is ready to avoid constructor re-entrancy crashes
+            WR_SafeInstall([WRFileHook install]);
+            WR_SafeInstall([WRKeychainHook install]);
+            // Device/locale/timezone/location can be deferred but better early for first-launch
+            WR_SafeInstall([WRDeviceSpoof install]);
+            WR_SafeInstall([WRLocaleSpoof install]);
+            WR_SafeInstall([WRTimezoneSpoof install]);
+            WR_SafeInstall([WRLocationSpoof install]);
+            WR_SafeInstall([WRHardening install]);
+            // Defer container-group/pasteboard until UIKit ready
             dispatch_async(dispatch_get_main_queue(), ^{
-                WR_SafeInstall([WRDeviceSpoof install]);
-                WR_SafeInstall([WRLocaleSpoof install]);
-                WR_SafeInstall([WRTimezoneSpoof install]);
-                WR_SafeInstall([WRLocationSpoof install]);
-                WR_SafeInstall([WRHardening install]);
-                WR_SafeInstall([WRKeychainHook install]);
                 WR_SafeInstall([WRPrefsHook install]);
                 WR_SafeInstall([WRAppGroupHook install]);
                 WR_SafeInstall([WRPasteboardHook install]);
-                NSLog(@"[WhamRaptor] hooks installed deferred");
+                NSLog(@"[WhamRaptor] deferred hooks installed");
             });
         } else {
             NSLog(@"[WhamRaptor] SAFE MODE — hooks disabled");

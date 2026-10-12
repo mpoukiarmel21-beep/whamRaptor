@@ -15,6 +15,7 @@ WhamRaptor_FILES := \
 	Tweak/Core/WRContainerStore.m \
 	Tweak/Core/WRHomeRedirect.m \
 	Tweak/Core/WRAppRelaunch.m \
+	Tweak/Spoof/WRFileHook.m \
 	Tweak/Spoof/WRDeviceIdentity.m \
 	Tweak/Spoof/WRDeviceSpoof.m \
 	Tweak/Spoof/WRLocaleSpoof.m \
@@ -25,6 +26,7 @@ WhamRaptor_FILES := \
 	Tweak/Spoof/WRPrefsHook.m \
 	Tweak/Spoof/WRAppGroupHook.m \
 	Tweak/Spoof/WRPasteboardHook.m \
+	Tweak/UI/WROverlayWindow.m \
 	Tweak/UI/WRFloatingButton.m \
 	Tweak/UI/WRPanelVC.m \
 	Tweak/UI/WRCreateVC.m \
