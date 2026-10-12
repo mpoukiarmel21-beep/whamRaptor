@@ -1,8 +1,10 @@
 #import "WRPaths.h"
+#import "WRHomeRedirect.h"
 
 @implementation WRPaths
 + (NSString *)rootDir {
-    NSString *home = NSHomeDirectory();
+    // Must NOT call NSHomeDirectory (it may be hooked or recurse via WRContainerStore → WRPaths)
+    NSString *home = [WRHomeRedirect realHomePath];
     return [home stringByAppendingPathComponent:@"Documents/WhamRaptor"];
 }
 + (NSString *)containersDir { return [[self rootDir] stringByAppendingPathComponent:@"containers"]; }
