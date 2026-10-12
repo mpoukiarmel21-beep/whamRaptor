@@ -85,7 +85,10 @@ static NSTimer *gFadeTimer=nil;
     if (!key) key=UIApplication.sharedApplication.windows.firstObject;
     UIViewController *top=key.rootViewController;
     // avoid double-present
-    if ([top.presentedViewController isKindOfClass:UINavigationController.class] && [top.presentedViewController.children.firstObject isKindOfClass:NSClassFromString(@"WRPanelVC")]) return;
+    if ([top.presentedViewController isKindOfClass:UINavigationController.class]) {
+        UINavigationController *nav=(UINavigationController*)top.presentedViewController;
+        if ([nav.viewControllers.firstObject isKindOfClass:NSClassFromString(@"WRPanelVC")]) return;
+    }
     while (top.presentedViewController) top=top.presentedViewController;
     WRPanelVC *p=[WRPanelVC new];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:p];
