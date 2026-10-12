@@ -1,0 +1,9 @@
+Package: com.whamraptor.tweak
+Name: WhamRaptor
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: Containers isoles type Crane/Ghost pour Instagram — fake localisation carte monde, footprint par container (chip-aware), stockage isole illimite.
+Maintainer: WhamRaptor
+Author: WhamRaptor
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>=14.0)

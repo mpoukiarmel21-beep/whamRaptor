@@ -1,0 +1,264 @@
+name: build
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: 'IPA url or parts: prefix (e.g. parts:owner/repo/tag/base449.part)'
+        required: false
+        default: ''
+  push:
+    branches: [master, main]
+    paths:
+      - 'Tweak/**'
+      - 'vendor/**'
+      - 'Makefile'
+      - 'control'
+      - 'WhamRaptor.plist'
+      - 'Entitlements/**'
+      - '.github/workflows/build.yml'
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 150
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          set -e
+          if [ ! -d "$HOME/theos" ]; then
+            git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          else
+            echo "theos exists"
+          fi
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Cache SDK
+        run: |
+          set -e
+          SDK="$HOME/theos/sdks/iPhoneOS16.5.sdk"
+          if [ -d "$SDK" ]; then echo "SDK exists"; exit 0; fi
+          mkdir -p "$HOME/theos/sdks"
+          curl -L --fail --retry 3 -o /tmp/sdk.zip "https://github.com/theos/sdks/archive/master.zip" || true
+          # fallback: use existing sdks from theos if any
+          ls "$HOME/theos/sdks" || true
+
+      - name: Build tweak dylib
+        run: |
+          set -e
+          export THEOS="$HOME/theos"
+          export PATH="$THEOS/bin:$PATH"
+          make clean || true
+          make -j$(sysctl -n hw.ncpu) FINALPACKAGE=1
+          ls -lh .theos/obj/iphoneos/arm64/ 2>&1 | head -n 30
+          ls -lh packages/*.deb 2>&1 | head -n 20
+          # extract dylib from deb
+          mkdir -p /tmp/wr_extract
+          dpkg-deb -x packages/*.deb /tmp/wr_extract 2>/dev/null || tar -xzf packages/*.deb -C /tmp/wr_extract 2>&1 | head
+          find /tmp/wr_extract -name "*.dylib" -ls
+          DYLIB=$(find /tmp/wr_extract -name "*.dylib" | head -n 1)
+          echo "DYLIB=$DYLIB" >> $GITHUB_ENV
+          cp "$DYLIB" /tmp/WhamRaptor.dylib
+          ls -lh /tmp/WhamRaptor.dylib
+
+      - name: Prepare base IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+        run: |
+          set -e
+          python3 -m pip install --quiet lief requests 2>&1 | tail -n 5
+          # Download or use cached base
+          if echo "$IPA_URL" | grep -q "^parts:"; then
+            echo "parts mode: $IPA_URL"
+            SPEC=$(echo "$IPA_URL" | sed 's/^parts://')
+            # SPEC = owner/repo/tag/prefix
+            OWNER=$(echo "$SPEC" | cut -d/ -f1)
+            REPO=$(echo "$SPEC" | cut -d/ -f2)
+            TAG=$(echo "$SPEC" | cut -d/ -f3)
+            PREFIX=$(echo "$SPEC" | cut -d/ -f4-)
+            echo "owner=$OWNER repo=$REPO tag=$TAG prefix=$PREFIX"
+            # fetch release assets list via gh api
+            curl -sL -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$OWNER/$REPO/releases/tags/$TAG" > /tmp/rel.json
+            cat /tmp/rel.json | python3 -c "import json,sys; d=json.load(open('/tmp/rel.json')); [print(a['name'], a['browser_download_url']) for a in d.get('assets',[])]"
+            # download all parts matching prefix
+            mkdir -p /tmp/parts
+            python3 << 'PY'
+          import json, urllib.request, os, pathlib
+          import sys
+          d=json.load(open('/tmp/rel.json'))
+          prefix=os.environ.get('PREFIX','')
+          # actually parse from IPA_URL
+          import os as _os
+          spec=_os.environ.get('IPA_URL','').replace('parts:','')
+          parts=spec.split('/')
+          prefix='/'.join(parts[3:]) if len(parts)>=4 else parts[-1] if parts else ''
+          print('prefix',prefix)
+          assets=d.get('assets',[])
+          matches=[a for a in assets if a['name'].startswith(prefix)]
+          matches=sorted(matches,key=lambda a:a['name'])
+          print('matches',len(matches))
+          for a in matches:
+              url=a['browser_download_url']
+              name=a['name']
+              print('downloading',name)
+              urllib.request.urlretrieve(url, '/tmp/parts/'+name)
+          PY
+            cat /tmp/parts/*.part* > /tmp/clean449.ipa 2>/dev/null || cat /tmp/parts/* > /tmp/clean449.ipa
+            ls -lh /tmp/clean449.ipa
+            echo "BASE_IPA=/tmp/clean449.ipa" >> $GITHUB_ENV
+          elif [ -n "$IPA_URL" ]; then
+            echo "Downloading IPA from $IPA_URL"
+            curl -L --fail --retry 3 -o /tmp/base.ipa "$IPA_URL"
+            ls -lh /tmp/base.ipa
+            echo "BASE_IPA=/tmp/base.ipa" >> $GITHUB_ENV
+          else
+            # No URL supplied — build bare deb only, no IPA injection
+            echo "No IPA URL — will publish deb only"
+            echo "BASE_IPA=" >> $GITHUB_ENV
+          fi
+
+      - name: Clean injected code (if base IPA supplied)
+        if: env.BASE_IPA != ''
+        run: |
+          set -e
+          IPA="$BASE_IPA"
+          echo "Cleaning $IPA"
+          rm -rf /tmp/clean_work && mkdir -p /tmp/clean_work && cd /tmp/clean_work
+          unzip -q "$IPA" -d ipa_unzip
+          APP=$(find ipa_unzip/Payload -name "*.app" -type d | head -n 1)
+          echo "APP=$APP"
+          ls -lh "$APP" | head -n 30
+          # Remove injected bundles/dylibs if present
+          rm -rf "$APP/RyukGram.bundle" 2>/dev/null || true
+          rm -f "$APP/Frameworks/RyukGram.dylib" 2>/dev/null || true
+          rm -f "$APP/Frameworks/FLEXing.dylib" 2>/dev/null || true
+          rm -f "$APP/Frameworks/libflex.dylib" 2>/dev/null || true
+          rm -rf "$APP/Frameworks/CydiaSubstrate.framework" 2>/dev/null || true
+          ls -lh "$APP/Frameworks" | head -n 40
+          # Strip LC_LOAD_WEAK_DYLIB via LIEF
+          BIN="$APP/Instagram"
+          if [ -f "$BIN" ]; then
+            python3 << 'PY'
+          import lief, pathlib, sys
+          app = pathlib.Path(sys.argv[1])
+          # find binary
+          import glob, os
+          # app dir is like /tmp/clean_work/ipa_unzip/Payload/Instagram.app
+          # binary is Inside it named Instagram
+          bin_path = None
+          for p in pathlib.Path("/tmp/clean_work/ipa_unzip/Payload").rglob("Instagram"):
+              if p.is_file() and os.access(p, os.X_OK):
+                  # check macho
+                  try:
+                      b = lief.parse(str(p))
+                      if b:
+                          bin_path = str(p)
+                          break
+                  except: pass
+          if not bin_path:
+              # fallback
+              import subprocess, json
+              res = subprocess.run(["find","/tmp/clean_work/ipa_unzip","-type","f","-name","Instagram"], capture_output=True, text=True)
+              print(res.stdout)
+              sys.exit(0)
+          print("bin", bin_path)
+          binary = lief.parse(bin_path)
+          libs=[str(c.path) for c in binary.libraries]
+          print("libs before", len(libs))
+          for l in libs:
+              print(" ", l)
+          # remove Ryuk/Flex/Substrate refs
+          to_remove=[l for l in libs if any(k in l for k in ["RyukGram","FLEX","libflex","CydiaSubstrate"])]
+          print("to_remove", to_remove)
+          for r in to_remove:
+              try:
+                  # lief: remove library by name
+                  # Use binary.remove_library if available
+                  if hasattr(binary, 'remove_library'):
+                      binary.remove_library(r)
+                  print("removed", r)
+              except Exception as e:
+                  print("remove failed", r, e)
+          # Fallback: use MachO edit via python if needed - rewrite
+          if to_remove:
+              binary.write(bin_path)
+              print("rewritten")
+          # verify
+          binary2=lief.parse(bin_path)
+          libs2=[str(c.path) for c in binary2.libraries]
+          print("libs after", len(libs2))
+          for l in libs2:
+              if any(k in l for k in ["RyukGram","FLEX","Substrate"]):
+                  print(" STILL PRESENT", l)
+                  sys.exit(1)
+          print("clean OK")
+          PY
+          fi
+          # Re-zip clean
+          cd /tmp/clean_work
+          zip -qr /tmp/clean.ipa Payload
+          ls -lh /tmp/clean.ipa
+          echo "CLEAN_IPA=/tmp/clean.ipa" >> $GITHUB_ENV
+          if [ -z "$CLEAN_IPA" ]; then echo "CLEAN_IPA=/tmp/clean.ipa" >> $GITHUB_ENV; fi
+
+      - name: Inject WhamRaptor dylib
+        if: env.CLEAN_IPA != '' || env.BASE_IPA != ''
+        run: |
+          set -e
+          IPA="${CLEAN_IPA:-$BASE_IPA}"
+          echo "Injecting into $IPA"
+          rm -rf /tmp/inject_work && mkdir -p /tmp/inject_work && cd /tmp/inject_work
+          unzip -q "$IPA" -d ipa
+          APP=$(find ipa/Payload -name "*.app" -type d | head -n 1)
+          echo "APP=$APP"
+          cp /tmp/WhamRaptor.dylib "$APP/WhamRaptor.dylib"
+          ls -lh "$APP/WhamRaptor.dylib"
+          # install insert_dylib
+          if ! command -v insert_dylib >/dev/null 2>&1; then
+            brew install insert_dylib 2>&1 | tail -n 20 || true
+            # fallback: curl from theos
+            if ! command -v insert_dylib >/dev/null 2>&1; then
+              curl -L -o /tmp/insert_dylib "https://raw.githubusercontent.com/Tyilo/insert_dylib/master/insert_dylib" 2>&1 | head || true
+              chmod +x /tmp/insert_dylib 2>/dev/null || true
+              export PATH="/tmp:$PATH"
+            fi
+          fi
+          which insert_dylib || echo "insert_dylib not found"
+          BIN="$APP/Instagram"
+          otool -L "$BIN" | head -n 30
+          insert_dylib --all-yes --inplace @executable_path/WhamRaptor.dylib "$BIN" < /dev/null
+          echo "insert_dylib exit: $?"
+          otool -L "$BIN" | grep -i wham || (echo "inject failed" && exit 1)
+          # Ad-hoc sign (Sideloadly will re-sign; ad-hoc keeps structure valid)
+          codesign --force --sign - --timestamp=none "$APP/WhamRaptor.dylib" 2>&1 | head -n 20 || true
+          codesign --force --sign - --timestamp=none "$APP" 2>&1 | head -n 20 || true
+          # Frameworks re-sign if needed
+          find "$APP/Frameworks" -type f -name "*.dylib" -exec codesign --force --sign - --timestamp=none {} \; 2>&1 | head -n 20 || true
+          # Repack IPA
+          rm -f /tmp/WhamRaptor.ipa
+          zip -qr /tmp/WhamRaptor.ipa Payload
+          ls -lh /tmp/WhamRaptor.ipa
+          echo "FINAL_IPA=/tmp/WhamRaptor.ipa" >> $GITHUB_ENV
+
+      - name: Publish release
+        if: always()
+        run: |
+          set -e
+          # Determine version
+          VER=$(grep -m1 "^Version:" control | awk '{print $2}')
+          RUN=${{ github.run_number }}
+          TAG="build-${RUN}"
+          echo "Publishing $TAG"
+          gh release create "$TAG" --title "$TAG" --generate-notes 2>&1 | head -n 20 || true
+          if [ -f /tmp/WhamRaptor.ipa ]; then
+            gh release upload "$TAG" /tmp/WhamRaptor.ipa --clobber 2>&1 | head -n 20
+            echo "IPA uploaded: https://github.com/${{ github.repository }}/releases/download/${TAG}/WhamRaptor.ipa"
+          fi
+          if ls packages/*.deb 1>/dev/null 2>&1; then
+            gh release upload "$TAG" packages/*.deb --clobber 2>&1 | head -n 20 || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
