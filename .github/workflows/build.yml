@@ -46,28 +46,39 @@ jobs:
           set -e
           SDK="$HOME/theos/sdks/iPhoneOS16.5.sdk"
           if [ -d "$SDK" ]; then echo "SDK exists"; exit 0; fi
-          mkdir -p "$HOME/theos/sdks"
-          curl -L --fail --retry 3 -o /tmp/sdk.zip "https://github.com/theos/sdks/archive/master.zip" || true
-          # fallback: use existing sdks from theos if any
-          ls "$HOME/theos/sdks" || true
+          if [ ! -d "$HOME/theos/sdks/master" ]; then
+            curl -fsSLo /tmp/master.tar.gz https://github.com/theos/sdks/archive/master.tar.gz
+            tar -xzf /tmp/master.tar.gz -C "$HOME/theos/sdks" --strip-components=1
+            rm /tmp/master.tar.gz
+          fi
+          ls "$HOME/theos/sdks" | head -n 20
 
       - name: Build tweak dylib
         run: |
-          set -e
+          set -euo pipefail
           export THEOS="$HOME/theos"
           export PATH="$THEOS/bin:$PATH"
-          make clean || true
-          make -j$(sysctl -n hw.ncpu) FINALPACKAGE=1
-          ls -lh .theos/obj/iphoneos/arm64/ 2>&1 | head -n 30
-          ls -lh packages/*.deb 2>&1 | head -n 20
-          # extract dylib from deb
-          mkdir -p /tmp/wr_extract
-          dpkg-deb -x packages/*.deb /tmp/wr_extract 2>/dev/null || tar -xzf packages/*.deb -C /tmp/wr_extract 2>&1 | head
-          find /tmp/wr_extract -name "*.dylib" -ls
-          DYLIB=$(find /tmp/wr_extract -name "*.dylib" | head -n 1)
-          echo "DYLIB=$DYLIB" >> $GITHUB_ENV
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          echo "$THEOS/bin" >> $GITHUB_PATH
+          if ! command -v ldid >/dev/null 2>&1; then brew install ldid 2>&1 | tail -n 20 || true; fi
+          which ldid || true
+          make clean 2>&1 | tail -n 5
+          # Use Theos-supported flags (no FINALPACKAGE=1 with ipa packaging)
+          make -j$(sysctl -n hw.ncpu) 2>&1 | tail -n 80
+          echo "--- obj ---"; ls -R .theos 2>&1 | head -n 80; echo "--- packages ---"; ls -lh packages/ 2>&1 | head -n 30
+          find . -name "*.dylib" -type f 2>&1 | head -n 20
+          DYLIB=$(find .theos -name "*.dylib" -type f 2>/dev/null | head -n 1)
+          if [ -z "$DYLIB" ]; then DYLIB=$(find . -name "WhamRaptor.dylib" -type f | head -n 1); fi
+          if [ -z "$DYLIB" ]; then echo "::error::No dylib produced"; exit 1; fi
+          echo "DYLIB=$DYLIB" | tee -a $GITHUB_ENV
+          ls -lh "$DYLIB"
+          otool -L "$DYLIB" 2>&1 | head -n 20 || true
           cp "$DYLIB" /tmp/WhamRaptor.dylib
           ls -lh /tmp/WhamRaptor.dylib
+          echo "WR_DYLIB=$DYLIB" >> $GITHUB_ENV
+          # Also package deb for release even without IPA packaging
+          make package 2>&1 | tail -n 30 || true
+          ls -lh packages/ 2>&1 | head -n 20
 
       - name: Prepare base IPA
         env:
