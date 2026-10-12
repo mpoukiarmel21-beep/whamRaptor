@@ -4,6 +4,7 @@ DEBUG := 0
 FINALPACKAGE := 1
 
 THEOS_PACKAGE_SCHEME := rootless
+PACKAGE_FORMAT := deb
 
 TWEAK_NAME := WhamRaptor
 

@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       ipa_url:
-        description: 'IPA url or parts: prefix (e.g. parts:owner/repo/tag/base449.part)'
+        description: 'Base IPA: direct URL or parts:owner/repo/tag/prefix (e.g. parts:mpoukiarmel21-beep/whamRaptor/base-449/base449.part)'
         required: false
         default: ''
   push:
@@ -17,264 +17,224 @@ on:
       - 'Entitlements/**'
       - '.github/workflows/build.yml'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-14
     timeout-minutes: 150
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Theos
+      - name: Setup Theos
         run: |
-          set -e
-          if [ ! -d "$HOME/theos" ]; then
-            git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
-          else
-            echo "theos exists"
+          set -euo pipefail
+          export THEOS="$HOME/theos"
+          if [ ! -d "$THEOS" ]; then
+            git clone --recursive https://github.com/theos/theos.git "$THEOS"
           fi
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          # Ensure ldid is available (Theos signing)
-          if ! command -v ldid >/dev/null 2>&1; then
-            brew install ldid 2>&1 | tail -n 20 || true
+          # sdks
+          if [ ! -d "$THEOS/sdks/master" ]; then
+            if [ -d "$THEOS/sdks" ] && ls "$THEOS/sdks"/*.sdk >/dev/null 2>&1; then
+              echo "sdk exists"
+            else
+              mkdir -p "$THEOS/sdks"
+              curl -fsSLo /tmp/master.tar.gz https://github.com/theos/sdks/archive/master.tar.gz
+              tar -xzf /tmp/master.tar.gz -C "$THEOS/sdks" --strip-components=1
+              rm /tmp/master.tar.gz
+            fi
           fi
-          which ldid; ldid --help 2>&1 | head -n 5 || true
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+          echo "$THEOS/bin" >> "$GITHUB_PATH"
+          brew list --versions ldid >/dev/null 2>&1 || brew install ldid
+          if ! command -v insert_dylib >/dev/null 2>&1; then
+            git clone https://github.com/tyilo/insert_dylib.git /tmp/insert_dylib
+            (cd /tmp/insert_dylib && xcodebuild -quiet 2>&1 | tail -n 20 || make 2>&1 | tail -n 20 || true)
+            for c in /tmp/insert_dylib/build/Release/insert_dylib /tmp/insert_dylib/insert_dylib; do
+              [ -f "$c" ] && sudo cp "$c" /usr/local/bin/insert_dylib || cp "$c" /usr/local/bin/insert_dylib 2>/dev/null || true
+            done
+            chmod +x /usr/local/bin/insert_dylib 2>/dev/null || true
+          fi
+          which ldid; which insert_dylib || true
+          ls "$THEOS/sdks" | head -n 20
 
-      - name: Cache SDK
-        run: |
-          set -e
-          SDK="$HOME/theos/sdks/iPhoneOS16.5.sdk"
-          if [ -d "$SDK" ]; then echo "SDK exists"; exit 0; fi
-          if [ ! -d "$HOME/theos/sdks/master" ]; then
-            curl -fsSLo /tmp/master.tar.gz https://github.com/theos/sdks/archive/master.tar.gz
-            tar -xzf /tmp/master.tar.gz -C "$HOME/theos/sdks" --strip-components=1
-            rm /tmp/master.tar.gz
-          fi
-          ls "$HOME/theos/sdks" | head -n 20
-
-      - name: Build tweak dylib
+      - name: Build dylib
         run: |
           set -euo pipefail
           export THEOS="$HOME/theos"
           export PATH="$THEOS/bin:$PATH"
-          echo "THEOS=$THEOS" >> $GITHUB_ENV
-          echo "$THEOS/bin" >> $GITHUB_PATH
-          if ! command -v ldid >/dev/null 2>&1; then brew install ldid 2>&1 | tail -n 20 || true; fi
-          which ldid || true
           make clean 2>&1 | tail -n 5
-          # Use Theos-supported flags (no FINALPACKAGE=1 with ipa packaging)
           make -j$(sysctl -n hw.ncpu) 2>&1 | tail -n 80
-          echo "--- obj ---"; ls -R .theos 2>&1 | head -n 80; echo "--- packages ---"; ls -lh packages/ 2>&1 | head -n 30
+          echo "--- search dylib ---"
           find . -name "*.dylib" -type f 2>&1 | head -n 20
-          DYLIB=$(find .theos -name "*.dylib" -type f 2>/dev/null | head -n 1)
-          if [ -z "$DYLIB" ]; then DYLIB=$(find . -name "WhamRaptor.dylib" -type f | head -n 1); fi
-          if [ -z "$DYLIB" ]; then echo "::error::No dylib produced"; exit 1; fi
-          echo "DYLIB=$DYLIB" | tee -a $GITHUB_ENV
+          ls -R .theos 2>&1 | head -n 80
+          DYLIB=$(find .theos -name "WhamRaptor.dylib" -type f 2>/dev/null | head -n 1)
+          [ -z "$DYLIB" ] && DYLIB=$(find .theos -name "*.dylib" -type f | head -n 1)
+          [ -z "$DYLIB" ] && DYLIB=$(find . -name "*.dylib" -type f | head -n 1)
+          if [ -z "$DYLIB" ]; then echo "::error::No dylib"; exit 1; fi
+          echo "DYLIB=$DYLIB" | tee -a "$GITHUB_ENV"
           ls -lh "$DYLIB"
-          otool -L "$DYLIB" 2>&1 | head -n 20 || true
+          otool -L "$DYLIB" 2>&1 | head -n 30 || true
           cp "$DYLIB" /tmp/WhamRaptor.dylib
           ls -lh /tmp/WhamRaptor.dylib
-          echo "WR_DYLIB=$DYLIB" >> $GITHUB_ENV
-          # Also package deb for release even without IPA packaging
+          # also try deb package (optional)
           make package 2>&1 | tail -n 30 || true
-          ls -lh packages/ 2>&1 | head -n 20
+          ls -lh packages/ 2>&1 | head -n 20 || echo "no packages dir"
 
-      - name: Prepare base IPA
+      - name: Download base IPA
         env:
-          IPA_URL: ${{ inputs.ipa_url }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
-          python3 -m pip install --quiet lief requests 2>&1 | tail -n 5
-          # Download or use cached base
-          if echo "$IPA_URL" | grep -q "^parts:"; then
-            echo "parts mode: $IPA_URL"
-            SPEC=$(echo "$IPA_URL" | sed 's/^parts://')
-            # SPEC = owner/repo/tag/prefix
-            OWNER=$(echo "$SPEC" | cut -d/ -f1)
-            REPO=$(echo "$SPEC" | cut -d/ -f2)
-            TAG=$(echo "$SPEC" | cut -d/ -f3)
-            PREFIX=$(echo "$SPEC" | cut -d/ -f4-)
-            echo "owner=$OWNER repo=$REPO tag=$TAG prefix=$PREFIX"
-            # fetch release assets list via gh api
-            curl -sL -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$OWNER/$REPO/releases/tags/$TAG" > /tmp/rel.json
-            cat /tmp/rel.json | python3 -c "import json,sys; d=json.load(open('/tmp/rel.json')); [print(a['name'], a['browser_download_url']) for a in d.get('assets',[])]"
-            # download all parts matching prefix
-            mkdir -p /tmp/parts
-            python3 << 'PY'
-          import json, urllib.request, os, pathlib
-          import sys
-          d=json.load(open('/tmp/rel.json'))
-          prefix=os.environ.get('PREFIX','')
-          # actually parse from IPA_URL
-          import os as _os
-          spec=_os.environ.get('IPA_URL','').replace('parts:','')
-          parts=spec.split('/')
-          prefix='/'.join(parts[3:]) if len(parts)>=4 else parts[-1] if parts else ''
-          print('prefix',prefix)
-          assets=d.get('assets',[])
-          matches=[a for a in assets if a['name'].startswith(prefix)]
-          matches=sorted(matches,key=lambda a:a['name'])
-          print('matches',len(matches))
-          for a in matches:
-              url=a['browser_download_url']
-              name=a['name']
-              print('downloading',name)
-              urllib.request.urlretrieve(url, '/tmp/parts/'+name)
-          PY
-            cat /tmp/parts/*.part* > /tmp/clean449.ipa 2>/dev/null || cat /tmp/parts/* > /tmp/clean449.ipa
-            ls -lh /tmp/clean449.ipa
-            echo "BASE_IPA=/tmp/clean449.ipa" >> $GITHUB_ENV
-          elif [ -n "$IPA_URL" ]; then
-            echo "Downloading IPA from $IPA_URL"
-            curl -L --fail --retry 3 -o /tmp/base.ipa "$IPA_URL"
-            ls -lh /tmp/base.ipa
-            echo "BASE_IPA=/tmp/base.ipa" >> $GITHUB_ENV
+          set -euo pipefail
+          IPA_URL="${{ inputs.ipa_url }}"
+          echo "ipa_url=$IPA_URL"
+          rm -f Input.ipa
+          if [ -z "$IPA_URL" ]; then
+            echo "No ipa_url supplied — skipping IPA build, will try local base-449 parts if present"
+            # try self-hosted base-449 parts (published by split upload)
+            if gh release view base-449 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Found base-449 release, downloading parts"
+              rm -rf _parts && mkdir -p _parts
+              gh release download base-449 --repo "$GITHUB_REPOSITORY" --pattern "base449.part*" -D _parts 2>&1 | tail -n 20 || true
+              if ls _parts/base449.part* >/dev/null 2>&1; then
+                cat _parts/base449.part* > Input.ipa
+                ls -lh Input.ipa
+              fi
+            fi
+            if [ ! -f Input.ipa ]; then
+              echo "No base IPA available — dylib only build"
+              exit 0
+            fi
+          elif [[ "$IPA_URL" == parts:* ]]; then
+            SPEC="${IPA_URL#parts:}"
+            REPO="$(echo "$SPEC" | cut -d/ -f1-2)"
+            TAG="$(echo "$SPEC" | cut -d/ -f3)"
+            PREFIX="$(echo "$SPEC" | cut -d/ -f4)"
+            echo "parts repo=$REPO tag=$TAG prefix=$PREFIX"
+            rm -rf _parts && mkdir -p _parts
+            gh release download "$TAG" --repo "$REPO" --pattern "${PREFIX}*" -D _parts 2>&1 | tail -n 20
+            ls -lh _parts
+            cat _parts/${PREFIX}* > Input.ipa 2>/dev/null || cat _parts/* > Input.ipa
+            ls -lh Input.ipa
+          elif [[ "$IPA_URL" == *github.com*releases*download* ]]; then
+            REPO="$(echo "$IPA_URL" | sed -E 's|https?://github.com/||; s|/releases/download/.*||')"
+            TAG="$(echo "$IPA_URL" | sed -E 's|.*/releases/download/||; s|/[^/]*$||')"
+            ASSET="$(echo "$IPA_URL" | sed -E 's|.*/releases/download/[^/]+/||')"
+            echo "gh release download repo=$REPO tag=$TAG asset=$ASSET"
+            gh release download "$TAG" --repo "$REPO" --pattern "$ASSET" -O Input.ipa 2>&1 | tail -n 20 || curl -L -o Input.ipa "$IPA_URL"
+            ls -lh Input.ipa
+          elif [[ "$IPA_URL" == http* ]]; then
+            curl -L -o Input.ipa "$IPA_URL" --connect-timeout 30 --max-time 600 --retry 2
+            ls -lh Input.ipa
           else
-            # No URL supplied — build bare deb only, no IPA injection
-            echo "No IPA URL — will publish deb only"
-            echo "BASE_IPA=" >> $GITHUB_ENV
+            # bare tag in current repo
+            rm -rf _dl && mkdir -p _dl
+            gh release download "$IPA_URL" --repo "$GITHUB_REPOSITORY" --pattern "*.ipa" -D _dl 2>&1 | tail -n 20 || true
+            IPA_DL="$(find _dl -name "*.ipa" -type f | head -n 1 || true)"
+            [ -n "$IPA_DL" ] && cp "$IPA_DL" Input.ipa
+            ls -lh Input.ipa
+          fi
+          if [ -f Input.ipa ]; then
+            file Input.ipa || true
+            # quick check it's zip
+            unzip -l Input.ipa 2>&1 | head -n 20 || true
           fi
 
-      - name: Clean injected code (if base IPA supplied)
-        if: env.BASE_IPA != ''
+      - name: Clean + Inject + Package IPA
+        if: always()
         run: |
-          set -e
-          IPA="$BASE_IPA"
-          echo "Cleaning $IPA"
-          rm -rf /tmp/clean_work && mkdir -p /tmp/clean_work && cd /tmp/clean_work
-          unzip -q "$IPA" -d ipa_unzip
-          APP=$(find ipa_unzip/Payload -name "*.app" -type d | head -n 1)
+          set -euo pipefail
+          if [ ! -f Input.ipa ]; then echo "No Input.ipa — skipping inject"; exit 0; fi
+          if [ ! -f /tmp/WhamRaptor.dylib ]; then echo "::error::No dylib"; exit 1; fi
+          WORKDIR="$(mktemp -d)"
+          echo "workdir=$WORKDIR"
+          cp Input.ipa "$WORKDIR/Input.ipa"
+          cd "$WORKDIR"
+          unzip -q Input.ipa
+          APP="$(ls -d Payload/*.app | head -n 1)"
           echo "APP=$APP"
-          ls -lh "$APP" | head -n 30
-          # Remove injected bundles/dylibs if present
+          # Clean RyukGram leftovers if present
           rm -rf "$APP/RyukGram.bundle" 2>/dev/null || true
           rm -f "$APP/Frameworks/RyukGram.dylib" 2>/dev/null || true
           rm -f "$APP/Frameworks/FLEXing.dylib" 2>/dev/null || true
           rm -f "$APP/Frameworks/libflex.dylib" 2>/dev/null || true
           rm -rf "$APP/Frameworks/CydiaSubstrate.framework" 2>/dev/null || true
-          ls -lh "$APP/Frameworks" | head -n 40
-          # Strip LC_LOAD_WEAK_DYLIB via LIEF
+          # LIEF clean LC_LOAD_WEAK_DYLIB
           BIN="$APP/Instagram"
+          if [ ! -f "$BIN" ]; then BIN="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null || echo Instagram)"; fi
+          echo "BIN=$BIN"
           if [ -f "$BIN" ]; then
+            python3 -m pip install -q lief 2>&1 | tail -n 5 || true
             python3 << 'PY'
-          import lief, pathlib, sys
-          app = pathlib.Path(sys.argv[1])
-          # find binary
-          import glob, os
-          # app dir is like /tmp/clean_work/ipa_unzip/Payload/Instagram.app
-          # binary is Inside it named Instagram
-          bin_path = None
-          for p in pathlib.Path("/tmp/clean_work/ipa_unzip/Payload").rglob("Instagram"):
-              if p.is_file() and os.access(p, os.X_OK):
-                  # check macho
+          import lief, pathlib, os, sys
+          bin_path=None
+          for p in pathlib.Path("Payload").rglob("Instagram"):
+              if p.is_file():
                   try:
-                      b = lief.parse(str(p))
-                      if b:
-                          bin_path = str(p)
-                          break
+                      b=lief.parse(str(p))
+                      if b: bin_path=str(p); break
                   except: pass
           if not bin_path:
-              # fallback
-              import subprocess, json
-              res = subprocess.run(["find","/tmp/clean_work/ipa_unzip","-type","f","-name","Instagram"], capture_output=True, text=True)
-              print(res.stdout)
-              sys.exit(0)
-          print("bin", bin_path)
-          binary = lief.parse(bin_path)
+              import subprocess
+              r=subprocess.run(["find","Payload","-type","f","-name","Instagram"], capture_output=True,text=True)
+              print(r.stdout); sys.exit(0)
+          print("bin",bin_path)
+          binary=lief.parse(bin_path)
           libs=[str(c.path) for c in binary.libraries]
-          print("libs before", len(libs))
-          for l in libs:
-              print(" ", l)
-          # remove Ryuk/Flex/Substrate refs
+          print("libs before",len(libs))
+          for l in libs: print(" ",l)
           to_remove=[l for l in libs if any(k in l for k in ["RyukGram","FLEX","libflex","CydiaSubstrate"])]
-          print("to_remove", to_remove)
+          print("to_remove",to_remove)
           for r in to_remove:
               try:
-                  # lief: remove library by name
-                  # Use binary.remove_library if available
-                  if hasattr(binary, 'remove_library'):
-                      binary.remove_library(r)
-                  print("removed", r)
-              except Exception as e:
-                  print("remove failed", r, e)
-          # Fallback: use MachO edit via python if needed - rewrite
+                  if hasattr(binary,'remove_library'): binary.remove_library(r)
+                  print("removed",r)
+              except Exception as e: print("remove failed",r,e)
           if to_remove:
-              binary.write(bin_path)
-              print("rewritten")
-          # verify
-          binary2=lief.parse(bin_path)
-          libs2=[str(c.path) for c in binary2.libraries]
-          print("libs after", len(libs2))
+              binary.write(bin_path); print("rewritten")
+          b2=lief.parse(bin_path)
+          libs2=[str(c.path) for c in b2.libraries]
           for l in libs2:
               if any(k in l for k in ["RyukGram","FLEX","Substrate"]):
-                  print(" STILL PRESENT", l)
-                  sys.exit(1)
+                  print("STILL",l); sys.exit(1)
           print("clean OK")
           PY
           fi
-          # Re-zip clean
-          cd /tmp/clean_work
-          zip -qr /tmp/clean.ipa Payload
-          ls -lh /tmp/clean.ipa
-          echo "CLEAN_IPA=/tmp/clean.ipa" >> $GITHUB_ENV
-          if [ -z "$CLEAN_IPA" ]; then echo "CLEAN_IPA=/tmp/clean.ipa" >> $GITHUB_ENV; fi
+          mkdir -p "$APP/Frameworks"
+          cp /tmp/WhamRaptor.dylib "$APP/Frameworks/WhamRaptor.dylib"
+          ls -lh "$APP/Frameworks/WhamRaptor.dylib"
+          # insert_dylib as @rpath (matches existing LC_RPATH @executable_path/Frameworks)
+          insert_dylib --all-yes --weak --inplace "@rpath/WhamRaptor.dylib" "$BIN" < /dev/null
+          otool -l "$BIN" 2>&1 | grep -q "WhamRaptor.dylib" || { echo "::error::load command not found"; otool -L "$BIN" | head -n 40; exit 1; }
+          echo "== injected =="; otool -L "$BIN" | head -n 40
+          codesign --force --sign - "$APP/Frameworks/WhamRaptor.dylib" 2>&1 | head -n 10 || true
+          codesign --force --sign - "$BIN" 2>&1 | head -n 10 || true
+          codesign -dvv "$BIN" 2>&1 | head -n 15 || true
+          rm -f "$GITHUB_WORKSPACE/WhamRaptor.ipa"
+          zip -r -X -q "$GITHUB_WORKSPACE/WhamRaptor.ipa" Payload/ -x '*.DS_Store'
+          ls -lh "$GITHUB_WORKSPACE/WhamRaptor.ipa"
+          echo "FINAL_IPA=$GITHUB_WORKSPACE/WhamRaptor.ipa" >> "$GITHUB_ENV"
 
-      - name: Inject WhamRaptor dylib
-        if: env.CLEAN_IPA != '' || env.BASE_IPA != ''
-        run: |
-          set -e
-          IPA="${CLEAN_IPA:-$BASE_IPA}"
-          echo "Injecting into $IPA"
-          rm -rf /tmp/inject_work && mkdir -p /tmp/inject_work && cd /tmp/inject_work
-          unzip -q "$IPA" -d ipa
-          APP=$(find ipa/Payload -name "*.app" -type d | head -n 1)
-          echo "APP=$APP"
-          cp /tmp/WhamRaptor.dylib "$APP/WhamRaptor.dylib"
-          ls -lh "$APP/WhamRaptor.dylib"
-          # install insert_dylib
-          if ! command -v insert_dylib >/dev/null 2>&1; then
-            brew install insert_dylib 2>&1 | tail -n 20 || true
-            # fallback: curl from theos
-            if ! command -v insert_dylib >/dev/null 2>&1; then
-              curl -L -o /tmp/insert_dylib "https://raw.githubusercontent.com/Tyilo/insert_dylib/master/insert_dylib" 2>&1 | head || true
-              chmod +x /tmp/insert_dylib 2>/dev/null || true
-              export PATH="/tmp:$PATH"
-            fi
-          fi
-          which insert_dylib || echo "insert_dylib not found"
-          BIN="$APP/Instagram"
-          otool -L "$BIN" | head -n 30
-          insert_dylib --all-yes --inplace @executable_path/WhamRaptor.dylib "$BIN" < /dev/null
-          echo "insert_dylib exit: $?"
-          otool -L "$BIN" | grep -i wham || (echo "inject failed" && exit 1)
-          # Ad-hoc sign (Sideloadly will re-sign; ad-hoc keeps structure valid)
-          codesign --force --sign - --timestamp=none "$APP/WhamRaptor.dylib" 2>&1 | head -n 20 || true
-          codesign --force --sign - --timestamp=none "$APP" 2>&1 | head -n 20 || true
-          # Frameworks re-sign if needed
-          find "$APP/Frameworks" -type f -name "*.dylib" -exec codesign --force --sign - --timestamp=none {} \; 2>&1 | head -n 20 || true
-          # Repack IPA
-          rm -f /tmp/WhamRaptor.ipa
-          zip -qr /tmp/WhamRaptor.ipa Payload
-          ls -lh /tmp/WhamRaptor.ipa
-          echo "FINAL_IPA=/tmp/WhamRaptor.ipa" >> $GITHUB_ENV
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhamRaptor-IPA
+          path: |
+            WhamRaptor.ipa
+            packages/*.deb
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Publish release
         if: always()
-        run: |
-          set -e
-          # Determine version
-          VER=$(grep -m1 "^Version:" control | awk '{print $2}')
-          RUN=${{ github.run_number }}
-          TAG="build-${RUN}"
-          echo "Publishing $TAG"
-          gh release create "$TAG" --title "$TAG" --generate-notes 2>&1 | head -n 20 || true
-          if [ -f /tmp/WhamRaptor.ipa ]; then
-            gh release upload "$TAG" /tmp/WhamRaptor.ipa --clobber 2>&1 | head -n 20
-            echo "IPA uploaded: https://github.com/${{ github.repository }}/releases/download/${TAG}/WhamRaptor.ipa"
-          fi
-          if ls packages/*.deb 1>/dev/null 2>&1; then
-            gh release upload "$TAG" packages/*.deb --clobber 2>&1 | head -n 20 || true
-          fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="build-${{ github.run_number }}"
+          REPO="${{ github.repository }}"
+          gh release create "$TAG" --repo "$REPO" --title "WhamRaptor Build ${{ github.run_number }}" --notes "Auto build ${{ github.run_number }} — $(git log -1 --oneline)" 2>&1 | tail -n 10 || true
+          if [ -f WhamRaptor.ipa ]; then gh release upload "$TAG" WhamRaptor.ipa --repo "$REPO" --clobber 2>&1 | tail -n 10; echo "IPA: https://github.com/$REPO/releases/download/$TAG/WhamRaptor.ipa"; fi
+          if ls packages/*.deb >/dev/null 2>&1; then gh release upload "$TAG" packages/*.deb --repo "$REPO" --clobber 2>&1 | tail -n 10 || true; fi
