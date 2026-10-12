@@ -96,7 +96,7 @@
     self.map.showsCompass=YES; self.map.showsScale=YES;
     self.map.mapType=MKMapTypeStandard;
     if (@available(iOS 11.0,*)) self.map.mapType=MKMapTypeMutedStandard;
-    self.map.pointOfInterestFilter=MKPointOfInterestFilter.excludingAllFilter;
+    if (@available(iOS 13.0,*)) self.map.pointOfInterestFilter=[MKPointOfInterestFilter filterExcludingAllCategories];
     UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(mapTapped:)];
     [self.map addGestureRecognizer:tap];
     [self.view addSubview:self.map];
