@@ -38,8 +38,7 @@ static int wr_access(const char *path, int mode){
             });
             method_setImplementation(m, n);
         }
-        Method m2=class_getClassMethod(dc, @selector(currentDevice));
-        // leave as is
+        (void)class_getClassMethod(dc, @selector(currentDevice));
     }
     Class attest=NSClassFromString(@"DCAppAttestService");
     if (attest){
