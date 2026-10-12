@@ -181,7 +181,14 @@ jobs:
               print(r.stdout); sys.exit(0)
           print("bin",bin_path)
           binary=lief.parse(bin_path)
-          libs=[str(c.path) for c in binary.libraries]
+          # lief 0.17+: DylibCommand uses .name not .path
+          def lib_name(c):
+              for attr in ("name","path"):
+                  if hasattr(c,attr):
+                      try: return str(getattr(c,attr))
+                      except: pass
+              return str(c)
+          libs=[lib_name(c) for c in binary.libraries]
           print("libs before",len(libs))
           for l in libs: print(" ",l)
           to_remove=[l for l in libs if any(k in l for k in ["RyukGram","FLEX","libflex","CydiaSubstrate"])]
@@ -194,7 +201,7 @@ jobs:
           if to_remove:
               binary.write(bin_path); print("rewritten")
           b2=lief.parse(bin_path)
-          libs2=[str(c.path) for c in b2.libraries]
+          libs2=[lib_name(c) for c in b2.libraries]
           for l in libs2:
               if any(k in l for k in ["RyukGram","FLEX","Substrate"]):
                   print("STILL",l); sys.exit(1)
