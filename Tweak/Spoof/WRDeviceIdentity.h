@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-@class WRDeviceIdentity;
+#import "WRContainer.h"
 NS_ASSUME_NONNULL_BEGIN
 @interface WRDeviceIdentityFactory : NSObject
 + (WRDeviceIdentity *)generateIdentity;

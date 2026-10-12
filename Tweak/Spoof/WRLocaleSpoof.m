@@ -13,8 +13,6 @@ static NSLocale *wr_currentLocale(id self, SEL _c){
     if (c.hasLocation && c.location.localeIdentifier.length) return [[NSLocale alloc] initWithLocaleIdentifier:c.location.localeIdentifier];
     return orig_currentLocale?orig_currentLocale(self,_c):[[NSLocale alloc] initWithLocaleIdentifier:@"en_US"];
 }
-static NSString*(*orig_AppleLanguages)(id,SEL)=NULL;
-
 @implementation WRLocaleSpoof
 + (void)install {
     Method m1=class_getClassMethod(NSLocale.class, @selector(preferredLanguages));
